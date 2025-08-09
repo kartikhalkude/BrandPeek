@@ -1,11 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL ;
-const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
+// Get environment variables with fallback
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 
+                    process.env.REACT_APP_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 
+                         process.env.REACT_APP_SUPABASE_ANON_KEY;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Initialize Supabase (with error handling)
+let supabase = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log('✅ Supabase initialized');
+  } catch (error) {
+    console.error('❌ Supabase init failed:', error);
+  }
+} else {
+  console.warn('⚠️ Using fallback data (no Supabase credentials)');
+}
 
-// Expanded fallback data
+// Expanded fallback data (works without internet)
 const FALLBACK_BRANDS = [
   {
     id: '1',
@@ -46,204 +60,86 @@ const FALLBACK_BRANDS = [
     founded: '1886',
     headquarters: 'Atlanta, Georgia',
     category: 'Beverages'
+  },
+  {
+    id: '5',
+    name: 'Google',
+    logo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2f/Google_2015_logo.svg/2560px-Google_2015_logo.svg.png',
+    description: 'Don\'t be evil - Tech giant',
+    fullDescription: 'Google is a leading technology company founded in 1998. Based in California, USA, they continue to innovate and shape the future of their industry through cutting-edge technology and customer-focused solutions.',
+    founded: '1998',
+    headquarters: 'California, USA',
+    category: 'Technology'
   }
 ];
 
-// Cache management
-const cache = new Map();
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-
-const getCacheKey = (operation, params = {}) => {
-  return `${operation}-${JSON.stringify(params)}`;
-};
-
-const getCachedData = (key) => {
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-    return cached.data;
-  }
-  return null;
-};
-
-const setCachedData = (key, data) => {
-  cache.set(key, { data, timestamp: Date.now() });
-};
-
 export const apiService = {
-  // Get all brands with optional filtering and caching
   getBrands: async (filters = {}) => {
-    const cacheKey = getCacheKey('brands', filters);
-    const cachedData = getCachedData(cacheKey);
+    // Try Supabase first, fallback to offline data
+    if (supabase) {
+      try {
+        let query = supabase.from('brands').select('*');
+        
+        if (filters.category) {
+          query = query.ilike('category', `%${filters.category}%`);
+        }
+        if (filters.search) {
+          query = query.or(`name.ilike.%${filters.search}%,description.ilike.%${filters.search}%`);
+        }
+        
+        const { data, error } = await query.order('name', { ascending: true });
+        
+        if (error) throw error;
+        console.log('✅ Fetched from Supabase:', data.length, 'brands');
+        return data;
+      } catch (error) {
+        console.warn('⚠️ Supabase failed, using fallback:', error.message);
+      }
+    }
     
-    if (cachedData) {
-      console.log('Using cached brand data');
-      return cachedData;
-    }
-
-    try {
-      console.log('Fetching brands from Supabase...', filters);
-
-      let query = supabase
-        .from('brands')
-        .select('*');
-
-      // Apply filters if provided
-      if (filters.category) {
-        query = query.ilike('category', `%${filters.category}%`);
-      }
-      if (filters.search) {
-        query = query.or(`name.ilike.%${filters.search}%,description.ilike.%${filters.search}%`);
-      }
-
-      query = query.order('name', { ascending: true });
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw error;
-      }
-
-      if (!data || !Array.isArray(data)) {
-        throw new Error('Invalid data format from Supabase');
-      }
-
-      console.log('Successfully fetched brands:', data.length);
-      setCachedData(cacheKey, data);
-      return data;
-
-    } catch (error) {
-      console.error('Supabase fetch failed, using fallback data:', error.message);
-      
-      // Apply filters to fallback data
-      let filteredFallback = [...FALLBACK_BRANDS];
-      
-      if (filters.category) {
-        filteredFallback = filteredFallback.filter(brand => 
-          brand.category.toLowerCase().includes(filters.category.toLowerCase())
-        );
-      }
-      
-      if (filters.search) {
-        const searchTerm = filters.search.toLowerCase();
-        filteredFallback = filteredFallback.filter(brand =>
-          brand.name.toLowerCase().includes(searchTerm) ||
-          brand.description.toLowerCase().includes(searchTerm)
-        );
-      }
-
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      return filteredFallback;
-    }
+    // Use fallback data
+    console.log('📱 Using fallback data');
+    return applyFiltersToFallback(FALLBACK_BRANDS, filters);
   },
 
-  // Get single brand by ID with caching
   getBrandById: async (id) => {
-    const cacheKey = getCacheKey('brand', { id });
-    const cachedData = getCachedData(cacheKey);
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('brands')
+          .select('*')
+          .eq('id', id)
+          .single();
+        
+        if (error) throw error;
+        return data;
+      } catch (error) {
+        console.warn('⚠️ Supabase failed for brand detail, using fallback');
+      }
+    }
     
-    if (cachedData) {
-      console.log(`Using cached brand data for ID: ${id}`);
-      return cachedData;
-    }
-
-    try {
-      console.log(`Fetching brand with ID ${id} from Supabase...`);
-
-      const { data, error } = await supabase
-        .from('brands')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) {
-        throw error;
-      }
-
-      if (!data) {
-        throw new Error(`Brand with ID ${id} not found in database`);
-      }
-
-      console.log(`Successfully fetched brand: ${data.name}`);
-      setCachedData(cacheKey, data);
-      return data;
-
-    } catch (error) {
-      console.error(`Error in getBrandById for ID ${id}:`, error.message);
-      
-      const fallbackBrand = FALLBACK_BRANDS.find(b => b.id.toString() === id.toString());
-      
-      if (!fallbackBrand) {
-        throw new Error(`Brand with ID ${id} not found`);
-      }
-      
-      console.log(`Using fallback data for brand: ${fallbackBrand.name}`);
-      return fallbackBrand;
-    }
-  },
-
-  // Get unique categories
-  getCategories: async () => {
-    const cacheKey = getCacheKey('categories');
-    const cachedData = getCachedData(cacheKey);
-    
-    if (cachedData) {
-      console.log('Using cached categories data');
-      return cachedData;
-    }
-
-    try {
-      console.log('Fetching categories from Supabase...');
-
-      const { data, error } = await supabase
-        .from('brands')
-        .select('category')
-        .not('category', 'is', null);
-
-      if (error) {
-        throw error;
-      }
-
-      const categories = [...new Set(data.map(item => item.category))].sort();
-      setCachedData(cacheKey, categories);
-      return categories;
-
-    } catch (error) {
-      console.error('Failed to fetch categories, using fallback:', error.message);
-      const fallbackCategories = [...new Set(FALLBACK_BRANDS.map(brand => brand.category))].sort();
-      return fallbackCategories;
-    }
-  },
-
-  // Clear cache (useful for refreshing data)
-  clearCache: () => {
-    cache.clear();
-    console.log('Cache cleared');
-  },
-
-  // Health check for Supabase connection
-  healthCheck: async () => {
-    try {
-      const { data, error } = await supabase
-        .from('brands')
-        .select('count', { count: 'exact', head: true });
-
-      if (error) {
-        throw error;
-      }
-
-      return { 
-        status: 'healthy', 
-        timestamp: new Date().toISOString(),
-        totalRecords: data?.length || 0
-      };
-
-    } catch (error) {
-      return { 
-        status: 'error', 
-        timestamp: new Date().toISOString(),
-        error: error.message 
-      };
-    }
+    const brand = FALLBACK_BRANDS.find(b => b.id.toString() === id.toString());
+    if (!brand) throw new Error(`Brand with ID ${id} not found`);
+    return brand;
   }
 };
+
+function applyFiltersToFallback(brands, filters) {
+  let filtered = [...brands];
+  
+  if (filters.category) {
+    filtered = filtered.filter(brand => 
+      brand.category.toLowerCase().includes(filters.category.toLowerCase())
+    );
+  }
+  
+  if (filters.search) {
+    const term = filters.search.toLowerCase();
+    filtered = filtered.filter(brand =>
+      brand.name.toLowerCase().includes(term) ||
+      brand.description.toLowerCase().includes(term)
+    );
+  }
+  
+  return filtered;
+}
